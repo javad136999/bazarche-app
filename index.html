@@ -362,14 +362,15 @@
             <label>توضیح کوتاه</label>
             <textarea required id="f-desc" placeholder="اپلیکیشن چیکار می‌کنه؟ در یکی دو جمله بنویس."></textarea>
           </div>
-          <div class="two-col">
-            <div class="form-row">
-              <label>لینک دانلود یا صفحه اپلیکیشن</label>
-              <input required id="f-link" type="text" placeholder="https://…">
-            </div>
-            <div class="form-row">
-              <label>راه ارتباطی (تلفن یا آیدی تلگرام)</label>
-              <input required id="f-contact" type="text" placeholder="برای هماهنگی پرداخت و تأیید">
+          <div class="form-row">
+            <label>راه ارتباطی (تلفن یا آیدی تلگرام)</label>
+            <input required id="f-contact" type="text" placeholder="برای هماهنگی پرداخت و تأیید">
+          </div>
+          <div class="form-row">
+            <label>فایل نصب اپلیکیشن (APK)</label>
+            <input required id="f-apk" type="file" accept=".apk,application/vnd.android.package-archive">
+            <div id="apkPreviewWrap" class="receipt-preview-wrap hidden">
+              <span id="apkPreviewName" class="receipt-preview-name"></span>
             </div>
           </div>
           <div class="form-row">
@@ -381,7 +382,7 @@
             </div>
           </div>
           <button type="submit" class="btn btn-primary" style="width:100%;">ارسال درخواست</button>
-          <p class="form-note">قبل از ارسال، مبلغ ۲۰۰ هزار تومان رو به شماره کارت بالا واریز کن و تصویر رسید رو پیوست کن. درخواست در وضعیت «در انتظار بررسی» ثبت می‌شه و بعد از دیدن رسید توسط مدیر، تأیید یا رد می‌شه.</p>
+          <p class="form-note">قبل از ارسال، مبلغ ۲۰۰ هزار تومان رو به شماره کارت بالا واریز کن، فایل APK اپلیکیشنت رو انتخاب کن و تصویر رسید رو پیوست کن. درخواست در وضعیت «در انتظار بررسی» ثبت می‌شه و بعد از دیدن رسید توسط مدیر، تأیید یا رد می‌شه. حجم فایل APK بهتره کمتر از ۵۰ مگابایت باشه.</p>
           <div id="submitStatus" class="status-msg"></div>
         </form>
       </div>
@@ -432,6 +433,8 @@ const SUPABASE_URL = "https://rjoprqbdpwfbfaalxsjw.supabase.co";
 const SUPABASE_ANON_KEY = "sb_publishable_ICtUTrqWI0SXr4k_1dlvJg_D-I48qqP";
 const sb = supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 const RECEIPTS_BUCKET = "receipts";
+const APKS_BUCKET = "apks";
+const MAX_APK_SIZE = 50 * 1024 * 1024; // 50MB
 
 const CATEGORIES = ["ابزار","سرگرمی","آموزشی","فروشگاهی","سلامت","شبکه اجتماعی","سایر"];
 const CARD_NUMBER = "5041721074262636";
@@ -443,6 +446,7 @@ let adminTab = "pending";
 let isAdmin = false;
 let pendingReceiptDataUrl = null;
 let pendingReceiptBlob = null;
+let pendingApkFile = null;
 
 /* فشرده‌سازی تصویر رسید قبل از آپلود */
 function compressImageFile(file, maxDim = 900, quality = 0.72){
@@ -474,9 +478,9 @@ function compressImageFile(file, maxDim = 900, quality = 0.72){
 
 function toFa(n){ return String(n).replace(/\d/g, d => "۰۱۲۳۴۵۶۷۸۹"[d]); }
 
-function receiptUrl(path){
+function fileUrl(bucket, path){
   if(!path) return null;
-  return sb.storage.from(RECEIPTS_BUCKET).getPublicUrl(path).data.publicUrl;
+  return sb.storage.from(bucket).getPublicUrl(path).data.publicUrl;
 }
 
 /* ---------- data access ---------- */
@@ -566,7 +570,7 @@ function renderBrowse(){
         <p class="app-desc">${escapeHtml(a.description)}</p>
         <div class="card-foot">
           <span class="tag">${escapeHtml(a.category)}</span>
-          <a href="${escapeAttr(a.link)}" target="_blank" rel="noopener" class="btn btn-primary btn-sm">دریافت اپ</a>
+          <a href="${escapeHtml(fileUrl(APKS_BUCKET, a.apk_path) || '#')}" target="_blank" rel="noopener" class="btn btn-primary btn-sm">دریافت اپ</a>
         </div>
       </div>
     </div>
@@ -590,6 +594,35 @@ document.getElementById('copyCardBtn').addEventListener('click', async ()=>{
     msg.textContent = 'متن انتخاب شد، کپی کن';
   }
   setTimeout(()=> msg.textContent = '', 2500);
+});
+
+/* ---------- apk upload ---------- */
+document.getElementById('f-apk').addEventListener('change', (e)=>{
+  const file = e.target.files[0];
+  const wrap = document.getElementById('apkPreviewWrap');
+  const statusEl = document.getElementById('submitStatus');
+  if(!file){ wrap.classList.add('hidden'); pendingApkFile = null; return; }
+  const isApk = file.name.toLowerCase().endsWith('.apk');
+  if(!isApk){
+    statusEl.className = 'status-msg err';
+    statusEl.textContent = 'فقط فایل با پسوند apk. قابل قبوله.';
+    e.target.value = '';
+    wrap.classList.add('hidden');
+    pendingApkFile = null;
+    return;
+  }
+  if(file.size > MAX_APK_SIZE){
+    statusEl.className = 'status-msg err';
+    statusEl.textContent = 'حجم فایل APK نباید بیشتر از ۵۰ مگابایت باشه.';
+    e.target.value = '';
+    wrap.classList.add('hidden');
+    pendingApkFile = null;
+    return;
+  }
+  pendingApkFile = file;
+  document.getElementById('apkPreviewName').textContent = `${file.name} (${(file.size/1024/1024).toFixed(1)} مگابایت)`;
+  wrap.classList.remove('hidden');
+  statusEl.className = ''; statusEl.style.display = 'none'; statusEl.textContent = '';
 });
 
 /* ---------- receipt upload ---------- */
@@ -629,15 +662,19 @@ document.getElementById('submitForm').addEventListener('submit', async (e)=>{
     statusEl.textContent = 'لطفاً بعد از واریز، تصویر رسید رو پیوست کن.';
     return;
   }
+  if(!pendingApkFile){
+    statusEl.className = 'status-msg err';
+    statusEl.textContent = 'لطفاً فایل APK اپلیکیشنت رو انتخاب کن.';
+    return;
+  }
 
   const name = document.getElementById('f-name').value.trim();
   const developer = document.getElementById('f-dev').value.trim();
   const category = document.getElementById('f-cat').value;
   const description = document.getElementById('f-desc').value.trim();
-  const link = document.getElementById('f-link').value.trim();
   const contact = document.getElementById('f-contact').value.trim();
 
-  if(!name || !developer || !description || !link || !contact){
+  if(!name || !developer || !description || !contact){
     statusEl.className = 'status-msg err';
     statusEl.textContent = 'لطفاً همه فیلدهای ضروری رو پر کن.';
     return;
@@ -647,26 +684,35 @@ document.getElementById('submitForm').addEventListener('submit', async (e)=>{
   submitBtn.textContent = 'در حال ارسال…';
 
   try{
-    const fileName = `${Date.now()}-${Math.random().toString(36).slice(2,8)}.jpg`;
-    const { error: uploadError } = await sb.storage
+    const receiptFileName = `${Date.now()}-${Math.random().toString(36).slice(2,8)}.jpg`;
+    const { error: receiptError } = await sb.storage
       .from(RECEIPTS_BUCKET)
-      .upload(fileName, pendingReceiptBlob, { contentType: 'image/jpeg' });
-    if(uploadError) throw uploadError;
+      .upload(receiptFileName, pendingReceiptBlob, { contentType: 'image/jpeg' });
+    if(receiptError) throw receiptError;
+
+    const apkFileName = `${Date.now()}-${Math.random().toString(36).slice(2,8)}.apk`;
+    const { error: apkError } = await sb.storage
+      .from(APKS_BUCKET)
+      .upload(apkFileName, pendingApkFile, { contentType: 'application/vnd.android.package-archive' });
+    if(apkError) throw apkError;
 
     const { error: insertError } = await sb.from('submissions').insert([{
-      name, developer, category, description, link, contact,
+      name, developer, category, description, contact,
       price: 200000,
-      receipt_path: fileName,
+      receipt_path: receiptFileName,
+      apk_path: apkFileName,
       status: 'pending'
     }]);
     if(insertError) throw insertError;
 
     statusEl.className = 'status-msg ok';
-    statusEl.textContent = 'درخواست و رسید ثبت شد. بعد از بررسی رسید توسط مدیر، اپلیکیشنت منتشر می‌شه.';
+    statusEl.textContent = 'درخواست، فایل اپلیکیشن و رسید ثبت شد. بعد از بررسی مدیر، اپلیکیشنت منتشر می‌شه.';
     e.target.reset();
     document.getElementById('receiptPreviewWrap').classList.add('hidden');
+    document.getElementById('apkPreviewWrap').classList.add('hidden');
     pendingReceiptDataUrl = null;
     pendingReceiptBlob = null;
+    pendingApkFile = null;
   }catch(err){
     statusEl.className = 'status-msg err';
     statusEl.textContent = 'مشکلی پیش اومد: ' + (err.message || 'دوباره امتحان کن.');
@@ -716,7 +762,8 @@ function renderAdmin(){
     return;
   }
   list.innerHTML = filtered.map(a => {
-    const url = receiptUrl(a.receipt_path);
+    const url = fileUrl(RECEIPTS_BUCKET, a.receipt_path);
+    const apkUrl = fileUrl(APKS_BUCKET, a.apk_path);
     return `
     <div class="admin-row">
       <div class="meta-with-receipt">
@@ -727,7 +774,7 @@ function renderAdmin(){
           <h4>${escapeHtml(a.name)} <span class="status-badge ${a.status}">${statusLabel(a.status)}</span></h4>
           <p>سازنده: ${escapeHtml(a.developer)} · دسته: ${escapeHtml(a.category)}</p>
           <p>${escapeHtml(a.description)}</p>
-          <p>لینک: ${escapeHtml(a.link)} · تماس: ${escapeHtml(a.contact)}</p>
+          <p>تماس: ${escapeHtml(a.contact)} · ${apkUrl ? `<a href="${escapeHtml(apkUrl)}" target="_blank" rel="noopener">دانلود APK</a>` : 'بدون APK'}</p>
           <p>هزینه انتشار: ۲۰۰,۰۰۰ تومان</p>
         </div>
       </div>
